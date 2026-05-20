@@ -1,0 +1,776 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover"/>
+  <title>Cotizador — Alas Uniformex</title>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet"/>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.31/jspdf.plugin.autotable.min.js"></script>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    html,body,#root{height:100%;overflow:hidden}
+    body{font-family:'DM Sans','Helvetica Neue',sans-serif;background:#f5f5f7;color:#1a1a1a}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    .spin{animation:spin .8s linear infinite}
+    select option{background:#fff;color:#1a1a1a}
+    input[type=number]::-webkit-inner-spin-button{opacity:1}
+    /* Layout principal: columna fija */
+    #app-shell{
+      display:flex;flex-direction:column;
+      height:100%;overflow:hidden;
+    }
+    /* Header siempre arriba */
+    #app-header{flex:0 0 auto}
+    /* Área de contenido scrolleable por tab */
+    #tab-content{
+      flex:1 1 auto;
+      overflow-y:auto;
+      -webkit-overflow-scrolling:touch;
+    }
+    /* Search bar sticky DENTRO del scroll container — ahora sí funciona */
+    .search-bar-sticky{
+      position:sticky;top:0;z-index:20;
+      background:#f5f5f7;
+      padding:10px 16px 8px;
+      border-bottom:1px solid #e2e2e8;
+    }
+    .tab-pad{padding:0 16px 48px}
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useMemo, useEffect, useRef } = React;
+
+const API_URL   = "https://script.google.com/macros/s/AKfycbzk8-vUGStn-EMcT0opc4PKwUm3aH0H0L6jooquvT9dtpZdBXRxQcvKAWyife7dn8Ys/exec";
+const API_TOKEN = "alas2026xyz";
+
+const PINK="#E91E8C", PURPLE="#9C27B0", BG="#f5f5f7", CARD="#ffffff";
+const BORDER="#e2e2e8", TEXT="#1a1a1a", MUTED="#6e6e80", DIM="#a0a0b0";
+const TYPE_COLORS={Chamarra:PINK,Polo:PURPLE,Playera:"#0288D1",Camisa:"#00796B",Servicio:"#E65100",Custom:"#546E7A",Sudadera:"#6D4C41",Gorra:"#37474F",Mochila:"#4527A0"};
+
+const VENDEDORES=["Debanhi Jiménez","Catarino Gómez","Margarita Gómez","Margarita Carreño"];
+const TERMINOS=[
+  "ISR aplica únicamente para personas morales",
+  "Precios en Pesos Mexicanos",
+  "Entrega en Monterrey 15 días hábiles",
+  "Vigencia de cotización: 15 días",
+  "Forma de pago: 100% sobre pedido",
+  "Precios sujetos a cambios en diseño y número de citas extra para ajustes",
+  "Digitalización de logo nuevo, costo adicional global $250",
+  "El tono de la tela puede variar entre rollo y rollo de tela",
+  "No se separa fecha sin confirmación (Anticipo)",
+];
+
+const fmt = n => Math.round(n).toLocaleString("es-MX");
+const nextFolio = () => "COT-"+new Date().getFullYear().toString().slice(-2)+String(Date.now()).slice(-4);
+const isEditable = brand => brand==="Custom"||brand==="Alas";
+const nextCustomCode = products => {
+  const nums=products.filter(p=>/^CUST-\d+$/.test(p.code)).map(p=>parseInt(p.code.split("-")[1]));
+  return "CUST-"+String(nums.length>0?Math.max(...nums)+1:1).padStart(3,"0");
+};
+const EMPTY_QUOTE = () => ({folio:nextFolio(),cliente:"",empresa:"",contacto:"",telefono:"",cuenta:"",vendedor:"",tipoPersona:"moral",isNew:false});
+
+// Scoring búsqueda — exacto primero
+function scoreProduct(p, q) {
+  const c=p.code.toLowerCase(), n=p.name.toLowerCase(), b=p.brand.toLowerCase(), t=p.type.toLowerCase(), d=p.desc.toLowerCase();
+  if(c===q) return 100;
+  if(c.startsWith(q)) return 90;
+  if(n===q) return 85;
+  if(n.startsWith(q)) return 75;
+  if(c.includes(q)) return 65;
+  if(n.includes(q)) return 55;
+  if(b===q) return 50; if(b.startsWith(q)) return 45; if(b.includes(q)) return 35;
+  if(t.includes(q)) return 30;
+  if(d.includes(q)) return 20;
+  return 0;
+}
+
+// API
+async function api(action, body={}) {
+  if(action==="savePDF") {
+    const res=await fetch(API_URL,{method:"POST",headers:{"Content-Type":"text/plain"},body:JSON.stringify({token:API_TOKEN,action,...body})});
+    return res.json();
+  }
+  const params=new URLSearchParams({token:API_TOKEN,action});
+  Object.entries(body).forEach(([k,v])=>params.append(k,v));
+  const res=await fetch(`${API_URL}?${params}`);
+  return res.json();
+}
+
+function mapProducto(p) {
+  return {
+    code:     String(p.code||"").trim(),
+    brand:    String(p.brand||"").trim(),
+    name:     String(p.desc||p.concat||p.code||"").trim(),
+    desc:     String(p.descInterna||"").trim(),
+    type:     String(p.type||"").trim(),
+    sinTalla: p.sinTalla===true||p.sinTalla==="true"||p.sinTalla==="TRUE",
+    price:    parseFloat(p.price)||0,
+    price2xl: parseFloat(p.price2xl)||0,
+    price3xl: parseFloat(p.price3xl)||0,
+    price4xl: parseFloat(p.price4xl)||0,
+    proveedor:String(p.proveedor||"").trim(),
+  };
+}
+
+function mapCliente(c) {
+  // Buscar campo con cualquier capitalización / tilde
+  const g=(...ks)=>{for(const k of ks){if(c[k]!==undefined&&c[k]!==null&&String(c[k]).trim()!=="")return String(c[k]).trim();}return "";};
+  return {
+    nombre:   g("atencion","Atención","Atencion","ATENCION","nombre","Nombre"),
+    empresa:  g("empresa","Empresa","EMPRESA"),
+    contacto: g("email","Email","EMAIL","contacto","Contacto","CONTACTO"),
+    telefono: g("telefono","Teléfono","Telefono","TELEFONO"),
+    cuenta:   g("cuenta","Cuenta","CUENTA"),
+    vendedor: "",
+  };
+}
+
+// Estilos compartidos
+const S = {
+  input:{width:"100%",boxSizing:"border-box",background:"#fff",border:"1.5px solid #e2e2e8",borderRadius:10,padding:"10px 14px",fontSize:14,color:TEXT,outline:"none",fontFamily:"inherit",boxShadow:"0 1px 3px rgba(0,0,0,0.05)"},
+  sel:{background:"#fff",border:"1.5px solid #e2e2e8",borderRadius:8,padding:"9px 12px",color:TEXT,fontFamily:"inherit",fontSize:13,outline:"none",width:"100%"},
+  lbl:{fontSize:11,color:MUTED,marginBottom:4,display:"block",fontWeight:600,letterSpacing:0.3},
+  card:{background:CARD,border:"1px solid #e2e2e8",borderRadius:14,padding:"14px 16px",marginBottom:10,boxShadow:"0 1px 4px rgba(0,0,0,0.06)"},
+  btnP:(c)=>({background:c||`linear-gradient(135deg,${PINK},${PURPLE})`,border:"none",borderRadius:10,padding:"13px 20px",color:"#fff",fontSize:14,fontWeight:600,cursor:"pointer",fontFamily:"inherit",width:"100%",marginBottom:8,boxShadow:"0 2px 8px rgba(233,30,140,0.25)"}),
+  btnS:{background:"#fff",border:"1.5px solid #e2e2e8",borderRadius:10,padding:"13px 20px",color:MUTED,fontSize:13,cursor:"pointer",fontFamily:"inherit",width:"100%",marginBottom:8},
+  navB:(a)=>({flex:1,padding:"9px 0",borderRadius:10,border:"none",cursor:"pointer",fontFamily:"inherit",fontSize:12,fontWeight:600,background:a?`linear-gradient(135deg,${PINK},${PURPLE})`:"transparent",color:a?"#fff":MUTED}),
+  totR:(b)=>({display:"flex",justifyContent:"space-between",padding:b?"10px 0 0":"5px 0",fontSize:b?16:13,fontWeight:b?700:400,color:b?TEXT:MUTED,borderTop:b?"1px solid #e2e2e8":"none",marginTop:b?6:0}),
+  toggle:(a,c)=>({flex:1,padding:"9px 0",borderRadius:8,border:`1.5px solid ${a?c:"#e2e2e8"}`,background:a?c+"18":"#fff",color:a?c:MUTED,fontSize:13,fontWeight:a?600:400,cursor:"pointer",fontFamily:"inherit"}),
+  tag:(t)=>({display:"inline-block",fontSize:10,padding:"2px 7px",borderRadius:4,background:(TYPE_COLORS[t]||"#888")+"18",color:TYPE_COLORS[t]||MUTED,marginLeft:6,fontWeight:600}),
+};
+
+// ── LOGIN ─────────────────────────────────────────────────────────────────────
+function LoginScreen({onLogin,loading,error}) {
+  const [pin,setPin]=useState(""); const [vend,setVend]=useState("");
+  return (
+    <div style={{height:"100%",display:"flex",alignItems:"center",justifyContent:"center",padding:20,background:`linear-gradient(135deg,${PINK}15,${PURPLE}12,#f5f5f7 60%)`}}>
+      <div style={{background:"#fff",border:"1px solid #e2e2e8",borderRadius:24,padding:"36px 28px",width:"100%",maxWidth:360,boxShadow:"0 8px 32px rgba(233,30,140,0.12)"}}>
+        <div style={{width:64,height:64,borderRadius:"50%",background:`linear-gradient(135deg,${PINK},${PURPLE})`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,fontWeight:900,fontStyle:"italic",color:"#fff",margin:"0 auto 16px"}}>A</div>
+        <h1 style={{textAlign:"center",fontSize:22,fontWeight:700,marginBottom:4}}>Alas Uniformex</h1>
+        <p style={{textAlign:"center",fontSize:12,color:DIM,marginBottom:28}}>Sistema de Cotización</p>
+        <span style={S.lbl}>Vendedor</span>
+        <select style={{...S.sel,marginBottom:16}} value={vend} onChange={e=>setVend(e.target.value)}>
+          <option value="">Selecciona tu nombre...</option>
+          {VENDEDORES.map(v=><option key={v} value={v}>{v}</option>)}
+        </select>
+        <span style={S.lbl}>PIN de acceso</span>
+        <input type="password" inputMode="numeric" maxLength={6} style={{...S.input,textAlign:"center",fontSize:22,letterSpacing:8,marginBottom:16}}
+          placeholder="••••" value={pin} onChange={e=>setPin(e.target.value)}
+          onKeyDown={e=>e.key==="Enter"&&vend&&pin&&onLogin(pin,vend)}/>
+        {error&&<p style={{color:"#ef5350",fontSize:12,textAlign:"center",marginBottom:12}}>⚠️ {error}</p>}
+        <button style={{...S.btnP(),marginBottom:0,opacity:(!vend||!pin||loading)?0.4:1}}
+          disabled={!vend||!pin||loading} onClick={()=>onLogin(pin,vend)}>
+          {loading?"Verificando...":"Entrar →"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function Spinner({msg="Cargando..."}) {
+  return <div style={{height:"100%",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16,background:BG}}><div className="spin" style={{width:36,height:36,borderRadius:"50%",border:"3px solid #e8e8ec",borderTopColor:PINK}}/><p style={{color:MUTED,fontSize:13}}>{msg}</p></div>;
+}
+
+function PriceEditor({initialPrice,canUpdateCatalog,onSave,onCancel}) {
+  const [val,setVal]=useState(String(initialPrice)); const [upd,setUpd]=useState(false);
+  return (
+    <div style={{background:"#fff8f0",border:`1.5px solid ${PINK}44`,borderRadius:10,padding:"12px 14px",marginBottom:10}}>
+      <span style={{...S.lbl,color:"#E65100",marginBottom:8}}>✏️ Modificar precio</span>
+      <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:8}}>
+        <input type="number" value={val} onChange={e=>setVal(e.target.value)} style={{...S.input,padding:"8px 12px",fontSize:14,flex:1}} autoFocus/>
+        <button onClick={()=>onSave(val,upd)} style={{background:PINK,border:"none",borderRadius:8,padding:"8px 16px",color:"#fff",fontSize:13,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>Aplicar</button>
+        <button onClick={onCancel} style={{background:"none",border:"1.5px solid #e2e2e8",borderRadius:8,padding:"8px 10px",color:MUTED,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>✕</button>
+      </div>
+      {canUpdateCatalog&&<label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",fontSize:12,color:MUTED}}><input type="checkbox" checked={upd} onChange={e=>setUpd(e.target.checked)}/>Actualizar también en el catálogo</label>}
+      {!canUpdateCatalog&&<p style={{fontSize:11,color:DIM,fontStyle:"italic",margin:0}}>Solo aplica a esta cotización</p>}
+    </div>
+  );
+}
+
+// ── MAIN APP ──────────────────────────────────────────────────────────────────
+function MainApp({vendedor,initProductos,initClientes}) {
+  const [view,setView]           = useState("search");
+  const [query,setQuery]         = useState("");
+  const [showAdhoc,setShowAdhoc] = useState(false);
+  const [adhoc,setAdhoc]         = useState({name:"",desc:"",price:""});
+  const [adhocError,setAdhocError] = useState("");
+  const [products,setProducts]   = useState(initProductos);
+  const [cart,setCart]           = useState([]);
+  const [editingPrice,setEditingPrice] = useState(null);
+  const [clients,setClients]     = useState(initClientes);
+  const [clientQuery,setClientQuery] = useState("");
+  const [clientResults,setClientResults] = useState([]);
+  const [quote,setQuote]         = useState({...EMPTY_QUOTE(),vendedor});
+  const [copied,setCopied]       = useState(false);
+  const [emailModal,setEmailModal] = useState(false);
+  const [emailTo,setEmailTo]     = useState("");
+  const [emailError,setEmailError] = useState("");
+  const [showReset,setShowReset] = useState(false);
+  const [savingDrive,setSavingDrive] = useState(false);
+  const [driveUrl,setDriveUrl]   = useState(null);
+  const scrollRef = useRef(null);
+
+  const esMoral = quote.tipoPersona==="moral";
+
+  // Al cambiar de tab, scroll al tope
+  function changeTab(t) {
+    setView(t);
+    if(scrollRef.current) scrollRef.current.scrollTop=0;
+    // cerrar adhoc al salir del catálogo
+    if(t!=="search") setShowAdhoc(false);
+  }
+
+  // Deduplicar productos por código (el Sheet puede tener duplicados)
+  const uniqueProducts = useMemo(()=>{
+    const seen=new Set();
+    return products.filter(p=>{
+      if(!p.code||seen.has(p.code)) return false;
+      seen.add(p.code); return true;
+    });
+  },[products]);
+
+  // Búsqueda con scoring
+  const results = useMemo(()=>{
+    if(!query.trim()) return [];
+    const q=query.toLowerCase().trim();
+    return uniqueProducts
+      .map(p=>({...p,_score:scoreProduct(p,q)}))
+      .filter(p=>p._score>0)
+      .sort((a,b)=>b._score-a._score)
+      .slice(0,25);
+  },[query,uniqueProducts]);
+
+  // Clientes
+  useEffect(()=>{
+    if(!clientQuery.trim()){setClientResults([]);return;}
+    const q=clientQuery.toLowerCase();
+    setClientResults(clients.filter(c=>
+      (c.nombre||"").toLowerCase().includes(q)||
+      (c.empresa||"").toLowerCase().includes(q)||
+      (c.contacto||"").toLowerCase().includes(q)
+    ).slice(0,6));
+  },[clientQuery,clients]);
+
+  function selectClient(c) {
+    setQuote(q=>({...q,cliente:c.nombre,empresa:c.empresa,contacto:c.contacto,telefono:c.telefono,cuenta:c.cuenta,vendedor:c.vendedor||q.vendedor,isNew:false}));
+    setClientQuery(c.nombre); setClientResults([]);
+  }
+  async function saveNewClient() {
+    const n={nombre:quote.cliente,empresa:quote.empresa,contacto:quote.contacto,telefono:quote.telefono,cuenta:quote.cuenta,vendedor:quote.vendedor};
+    setClients(prev=>[...prev,n]); setQuote(q=>({...q,isNew:false}));
+    try{await api("saveCliente",{atencion:n.nombre,empresa:n.empresa,email:n.contacto,telefono:n.telefono,cuenta:n.cuenta});}catch(e){}
+    alert("✅ Cliente guardado.");
+  }
+
+  function resetAll(){setCart([]);setQuote({...EMPTY_QUOTE(),vendedor});setClientQuery("");setQuery("");setShowReset(false);changeTab("search");setDriveUrl(null);}
+
+  function saveAdhoc(){
+    if(!adhoc.name.trim()){setAdhocError("El nombre es requerido");return;}
+    if(!adhoc.price||isNaN(parseFloat(adhoc.price))){setAdhocError("El precio es requerido");return;}
+    const code=nextCustomCode(products); const p=parseFloat(adhoc.price);
+    const newP={code,brand:"Custom",name:adhoc.name.trim(),desc:adhoc.desc.trim()||"Producto personalizado",type:"Custom",sinTalla:true,price:p,price2xl:p,price3xl:p,price4xl:p};
+    setProducts(prev=>[...prev,newP]);
+    setCart(prev=>[...prev,{...newP,cantidad:1,precioCustom:null,_id:Date.now()+Math.random()}]);
+    setAdhoc({name:"",desc:"",price:""});setAdhocError("");setShowAdhoc(false);changeTab("cart");
+  }
+
+  function addToCart(p) {
+    setCart(prev=>[...prev,{...p,cantidad:0,cantidad2xl:0,show3xl:false,show4xl:false,cantidad3xl:0,cantidad4xl:0,precioCustom:null,_id:Date.now()+Math.random()}]);
+  }
+  function removeFromCart(id){setCart(prev=>prev.filter(i=>i._id!==id));}
+  function updateCart(id,f,v){setCart(prev=>prev.map(i=>i._id===id?{...i,[f]:v}:i));}
+  const inCart=code=>cart.some(i=>i.code===code);
+
+  function applyPriceEdit(id,newPrice,updateCatalog){
+    const p=parseFloat(newPrice); if(isNaN(p)||p<=0) return;
+    setCart(prev=>prev.map(i=>i._id===id?{...i,precioCustom:p}:i));
+    if(updateCatalog) setProducts(prev=>prev.map(p2=>{const item=cart.find(i=>i._id===id);if(item&&p2.code===item.code)return{...p2,price:p,price2xl:p,price3xl:p,price4xl:p};return p2;}));
+    setEditingPrice(null);
+  }
+
+  // Solo líneas con cantidad > 0
+  function getCartLines(){
+    const lines=[];
+    cart.forEach(item=>{
+      const pr=item.precioCustom;
+      if(item.sinTalla){
+        if((item.cantidad||0)>0) lines.push({...item,tallaLine:"—",precioLine:pr!=null?pr:item.price,cantidadLine:item.cantidad});
+      } else {
+        [[item.cantidad||0,"XS–XL",pr!=null?pr:item.price],
+         [item.cantidad2xl||0,"2XL",pr!=null?pr:(item.price2xl||item.price)],
+         [item.show3xl?item.cantidad3xl||0:0,"3XL",pr!=null?pr:(item.price3xl||item.price)],
+         [item.show4xl?item.cantidad4xl||0:0,"4XL",pr!=null?pr:(item.price4xl||item.price)],
+        ].forEach(([qty,t,p])=>{ if(qty>0) lines.push({...item,tallaLine:t,precioLine:p,cantidadLine:qty}); });
+      }
+    });
+    return lines;
+  }
+
+  const lines=getCartLines();
+  const subtotal=lines.reduce((a,l)=>a+l.precioLine*l.cantidadLine,0);
+  const isr=esMoral?subtotal*0.0125:0;
+  const base=subtotal-isr; const iva=base*0.16; const total=base+iva;
+  const cartCount=cart.length;
+  const cartQty=cart.reduce((a,i)=>a+(i.sinTalla?i.cantidad||0:(i.cantidad||0)+(i.cantidad2xl||0)+(i.show3xl?i.cantidad3xl||0:0)+(i.show4xl?i.cantidad4xl||0:0)),0);
+
+  function copyWA(){
+    const txt=lines.map(l=>`• ${l.name} (${l.code})${!l.sinTalla?" "+l.tallaLine:""} ×${l.cantidadLine} — $${fmt(l.precioLine*l.cantidadLine)} MXN`).join("\n");
+    const msg=`📋 *Cotización Alas Uniformex*\nFolio: ${quote.folio}${quote.cliente?"\nCliente: "+quote.cliente:""}\n\n${txt}\n\nSubtotal: $${fmt(subtotal)} MXN\nIVA (16%): $${fmt(iva)} MXN\n*Total: $${fmt(total)} MXN*\n\nVigencia 15 días · ventas@alasuniformex.com`;
+    navigator.clipboard.writeText(msg).then(()=>{setCopied(true);setTimeout(()=>setCopied(false),2500);});
+  }
+  function openEmailModal(){
+    // Pre-llenar con el correo del cliente si existe, sino vacío para que el usuario lo ingrese
+    const emailDefault = (quote.contacto||"").trim();
+    setEmailTo(emailDefault);
+    setEmailError("");
+    setEmailModal(true);
+  }
+  function sendEmail(){
+    const e=emailTo.trim();
+    if(!e||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)){setEmailError("Ingresa un correo válido");return;}
+    const subject=encodeURIComponent(`Cotización ${quote.folio} - Alas Uniformex`);
+    const body=encodeURIComponent(`Estimado/a ${quote.cliente||"cliente"},\n\nAdjunto encontrará nuestra cotización ${quote.folio} por un total de $${fmt(total)} MXN.\n\nQuedamos a sus órdenes,\n${quote.vendedor||"Alas Uniformex"}\nventas@alasuniformex.com`);
+    window.open(`mailto:${e}?subject=${subject}&body=${body}`,"_self");
+    setEmailModal(false);
+  }
+
+  function printPDF(){
+    const w=window.open("","_blank");
+    let partida=1;
+    const rows=lines.map(l=>`<tr>
+      <td style="text-align:center">${partida++}</td>
+      <td style="text-align:center">${l.cantidadLine}</td>
+      <td style="text-align:center;font-weight:600">${l.code}</td>
+      <td>${l.name}</td>
+      <td style="text-align:center">${l.sinTalla?"—":l.tallaLine}</td>
+      <td style="text-align:center">Pieza</td>
+      <td style="text-align:right">($ ${fmt(l.precioLine)})</td>
+      <td style="text-align:right">($ ${fmt(l.precioLine*l.cantidadLine)})</td>
+    </tr>`).join("");
+    const isrRow=esMoral?`<tr class="totrow"><td colspan="7" style="text-align:right">ISR 1.25%</td><td style="text-align:right;color:#c0392b">($ (${fmt(isr)}))</td></tr>`:"";
+    const termRows=TERMINOS.map((t,i)=>`<li>${i+1}. ${t}</li>`).join("");
+    w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Cotización ${quote.folio}</title>
+    <style>
+      *{margin:0;padding:0;box-sizing:border-box}body{font-family:'Helvetica Neue',Arial,sans-serif;color:#1a1a1a;font-size:12px}
+      .page{padding:32px 40px}.hdr{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:24px}
+      .logo-box{display:flex;align-items:center;gap:14px}
+      .logo-circle{width:64px;height:64px;background:linear-gradient(135deg,${PINK},${PURPLE});border-radius:50%;display:flex;align-items:center;justify-content:center;color:white;font-size:20px;font-weight:900;font-style:italic}
+      .company h2{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px}.company p{font-size:11px;color:#666;margin-top:2px}.company .email{color:${PINK}}
+      .ref-box{text-align:right}.ref-box .ref{font-size:14px;font-weight:700;color:${PINK}}.ref-box p{font-size:11px;color:#888;margin-top:2px}
+      .client-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:18px;background:#fafafa;padding:12px 16px;border-left:3px solid ${PINK}}
+      .client-grid span{color:#999;font-size:9px;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:1px}.client-grid p{font-size:12px;font-weight:500}
+      .intro{font-size:11px;color:#555;margin-bottom:10px;font-style:italic}
+      table{width:100%;border-collapse:collapse;margin-bottom:14px;font-size:11px}
+      thead tr{background:${PINK};color:white}th{padding:7px 8px;text-align:center;font-weight:600;font-size:10px;letter-spacing:.3px}
+      tbody tr:nth-child(even){background:#fce4ec18}td{padding:7px 8px;border-bottom:1px solid #f0e0e8}
+      .totals{width:220px;margin-left:auto}.totrow td{padding:4px 8px;font-size:12px}.totrow td:last-child{text-align:right;font-weight:500}
+      .grand td{font-size:14px;font-weight:800;border-top:2px solid ${PINK};padding-top:8px}
+      .terms{margin-top:18px;font-size:10px;color:#555;border-top:1px solid #eee;padding-top:10px}
+      .terms h4{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px}
+      .terms ol{padding-left:0;list-style:none}.terms li{margin-bottom:2px}
+      .sign{margin-top:28px;text-align:right;font-size:12px;color:#444}
+    </style></head><body><div class="page">
+    <div class="hdr">
+      <div class="logo-box">
+        <div class="logo-circle">Alas</div>
+        <div class="company"><h2>Maquila y Suministro de Uniformes Industriales</h2>
+        <p>TEL: 8110155997 / 8115088362</p><p class="email">CORREO: ventas@alasuniformex.com</p></div>
+      </div>
+      <div class="ref-box"><div class="ref">Referencia: ${quote.folio}</div>
+      <p>${new Date().toLocaleDateString("es-MX",{day:"2-digit",month:"2-digit",year:"2-digit"})}</p></div>
+    </div>
+    <div class="client-grid">
+      <div><span>Atención</span><p>${quote.cliente||"—"}</p></div>
+      <div><span>Empresa</span><p>${quote.empresa||"—"}</p></div>
+      <div><span>Contacto</span><p>${quote.contacto||"—"}</p></div>
+      <div><span>Teléfono</span><p>${quote.telefono||"—"}</p></div>
+      <div><span>Cuenta</span><p>${quote.cuenta||"—"}</p></div>
+      <div><span>Elaboró</span><p>${quote.vendedor||"—"}</p></div>
+    </div>
+    <p class="intro">Ponemos a su consideración la cotización de acuerdo a lo solicitado</p>
+    <table><thead><tr><th>Partida</th><th>Cantidad</th><th>Código</th><th style="text-align:left">Descripción</th><th>Talla</th><th>Unidad</th><th>Precio Unitario</th><th>Monto Total</th></tr></thead><tbody>${rows}</tbody></table>
+    <table class="totals">
+      <tr class="totrow"><td>Subtotal ${lines.reduce((a,l)=>a+l.cantidadLine,0)} pzas</td><td>($ ${fmt(subtotal)})</td></tr>
+      <tr class="totrow"><td>IVA</td><td>($ ${fmt(iva)})</td></tr>
+      ${isrRow}
+      <tr class="totrow grand"><td>Total</td><td>($ ${fmt(total)})</td></tr>
+    </table>
+    <div class="terms"><h4>Términos de venta:</h4><ol>${termRows}</ol></div>
+    <p style="margin-top:14px;font-size:11px;color:#666;font-style:italic">Esperando vernos favorecidos con la confirmación del pedido, quedamos ante ustedes</p>
+    <div class="sign"><p>Atentamente</p><p style="font-weight:700;color:${PINK};margin-top:3px">${quote.vendedor||"Alas Uniformex"}</p></div>
+    </div></body></html>`);
+    w.document.close(); setTimeout(()=>w.print(),600);
+  }
+
+  async function saveToDrive(){
+    setSavingDrive(true); setDriveUrl(null);
+    try{
+      const {jsPDF}=window.jspdf;
+      const doc=new jsPDF({orientation:"portrait",unit:"mm",format:"letter"});
+      const W=215.9; let y=15;
+      doc.setFillColor(233,30,140); doc.circle(20,y+8,10,"F");
+      doc.setTextColor(255,255,255); doc.setFontSize(13); doc.setFont("helvetica","bold"); doc.text("Alas",14,y+11);
+      doc.setTextColor(233,30,140); doc.setFontSize(15); doc.text("Alas Uniformex",34,y+6);
+      doc.setTextColor(100,100,100); doc.setFontSize(8); doc.setFont("helvetica","normal");
+      doc.text("ventas@alasuniformex.com  |  8110155997 / 8115088362",34,y+12);
+      doc.setFontSize(9); doc.setFont("helvetica","bold"); doc.setTextColor(150,150,150);
+      doc.text("COTIZACIÓN",W-15,y+4,{align:"right"});
+      doc.setTextColor(233,30,140); doc.setFontSize(11); doc.text(quote.folio,W-15,y+10,{align:"right"});
+      doc.setTextColor(150,150,150); doc.setFontSize(8); doc.setFont("helvetica","normal");
+      doc.text(new Date().toLocaleDateString("es-MX",{day:"2-digit",month:"2-digit",year:"numeric"}),W-15,y+16,{align:"right"});
+      y+=28; doc.setDrawColor(233,30,140); doc.setLineWidth(0.5); doc.line(15,y,W-15,y); y+=6;
+      const ci=[["Atención:",quote.cliente||"—"],["Empresa:",quote.empresa||"—"],["Contacto:",quote.contacto||"—"],["Teléfono:",quote.telefono||"—"],["Cuenta:",quote.cuenta||"—"],["Elaboró:",quote.vendedor||"—"]];
+      doc.setFontSize(9); doc.setTextColor(80,80,80);
+      ci.slice(0,3).forEach(([lbl,val],i)=>{const cy=y+i*6;doc.setFont("helvetica","bold");doc.text(lbl,15,cy);doc.setFont("helvetica","normal");doc.text(val,38,cy);});
+      ci.slice(3).forEach(([lbl,val],i)=>{const cy=y+i*6;doc.setFont("helvetica","bold");doc.text(lbl,110,cy);doc.setFont("helvetica","normal");doc.text(val,125,cy);});
+      y+=22; doc.setDrawColor(233,30,140); doc.line(15,y,W-15,y); y+=4;
+      let part=1;
+      const tblRows=lines.map(l=>[part++,l.cantidadLine,l.code,l.name,l.sinTalla?"—":l.tallaLine,"PZA","$"+fmt(l.precioLine),"$"+fmt(l.precioLine*l.cantidadLine)]);
+      doc.autoTable({startY:y,head:[["#","Cant.","Código","Descripción","Talla","Unidad","P.Unit.","Total"]],body:tblRows,
+        theme:"striped",headStyles:{fillColor:[233,30,140],textColor:255,fontStyle:"bold",fontSize:8},bodyStyles:{fontSize:8,textColor:[60,60,60]},
+        columnStyles:{0:{cellWidth:8},1:{cellWidth:12},2:{cellWidth:18},3:{cellWidth:63},4:{cellWidth:15},5:{cellWidth:14},6:{cellWidth:20,halign:"right"},7:{cellWidth:22,halign:"right"}},
+        alternateRowStyles:{fillColor:[252,228,236]},margin:{left:15,right:15}});
+      y=doc.lastAutoTable.finalY+6;
+      const tots=[["Subtotal "+lines.reduce((a,l)=>a+l.cantidadLine,0)+" pzas","$"+fmt(subtotal)]];
+      if(esMoral)tots.push(["ISR Retenido 1.25%","- $"+fmt(isr)]);
+      tots.push(["IVA 16%","$"+fmt(iva)],["TOTAL","$"+fmt(total)]);
+      doc.autoTable({startY:y,body:tots,theme:"plain",bodyStyles:{fontSize:9,textColor:[60,60,60]},
+        columnStyles:{0:{cellWidth:120,halign:"right",fontStyle:"bold"},1:{cellWidth:40,halign:"right"}},margin:{left:15,right:15}});
+      y=doc.lastAutoTable.finalY+10;
+      if(y+55>270){doc.addPage();y=15;}
+      doc.setFontSize(9);doc.setFont("helvetica","bold");doc.setTextColor(233,30,140);doc.text("Términos de Venta",15,y);y+=5;
+      doc.setFont("helvetica","normal");doc.setTextColor(80,80,80);doc.setFontSize(8);
+      TERMINOS.forEach((t,i)=>{doc.text(`${i+1}. ${t}`,15,y,{maxWidth:W-30});y+=5;});
+      y+=4; doc.setTextColor(233,30,140);doc.setFont("helvetica","bold");doc.setFontSize(10);doc.text("Atentamente,",15,y);y+=6;
+      doc.setFontSize(11);doc.text(quote.vendedor||"Alas Uniformex",15,y);
+      const empresa=(quote.empresa||"SinCliente").replace(/[^a-zA-Z0-9]/g,"_");
+      const fname=`${new Date().toISOString().slice(0,10).replace(/-/g,".")}_${empresa}_${vendedor.split(" ")[0]}`;
+      const b64=doc.output("datauristring").split(",")[1];
+      const res=await api("savePDF",{pdfBase64:b64,fileName:fname,vendedor:vendedor.split(" ")[0]});
+      if(res.ok){setDriveUrl(res.url);}else{alert("Error al guardar en Drive: "+(res.error||"desconocido"));}
+    }catch(e){alert("Error: "+e.message);}
+    setSavingDrive(false);
+  }
+
+  return (
+    <div id="app-shell">
+      {/* ── MODALES ── */}
+      {emailModal&&<div style={{position:"fixed",inset:0,background:"#0006",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+        <div style={{background:"#fff",borderRadius:20,padding:28,width:"100%",maxWidth:380,boxShadow:"0 8px 32px rgba(0,0,0,0.12)"}}>
+          <p style={{fontWeight:700,fontSize:15,marginBottom:4}}>Confirmar correo de envío</p>
+          <p style={{fontSize:12,color:MUTED,marginBottom:14}}>Verifica el correo antes de enviar</p>
+          <span style={S.lbl}>Correo electrónico</span>
+          <input value={emailTo} onChange={e=>{setEmailTo(e.target.value);setEmailError("");}} 
+              placeholder={quote.contacto?"Correo del cliente: "+quote.contacto:"correo@empresa.com"} 
+              style={{...S.input,marginBottom:4}} autoFocus/>
+            {quote.contacto&&!emailTo&&<button onClick={()=>setEmailTo(quote.contacto)} style={{fontSize:11,color:PINK,background:"none",border:"none",cursor:"pointer",fontFamily:"inherit",marginBottom:8,padding:"2px 0"}}>
+              ← Usar {quote.contacto}
+            </button>}
+            {!quote.contacto&&<p style={{fontSize:11,color:DIM,marginBottom:8}}>No hay correo guardado para este cliente</p>}
+          {emailError&&<p style={{fontSize:12,color:"#ef5350",marginBottom:8}}>⚠️ {emailError}</p>}
+          <div style={{display:"flex",gap:8,marginTop:8}}>
+            <button onClick={sendEmail} style={{...S.btnP(),marginBottom:0,flex:1}}>Abrir correo</button>
+            <button onClick={()=>setEmailModal(false)} style={{...S.btnS,marginBottom:0,flex:1}}>Cancelar</button>
+          </div>
+        </div>
+      </div>}
+      {showReset&&<div style={{position:"fixed",inset:0,background:"#0006",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+        <div style={{background:"#fff",border:"1.5px solid #ffcdd2",borderRadius:20,padding:28,width:"100%",maxWidth:340,textAlign:"center",boxShadow:"0 8px 32px rgba(0,0,0,0.12)"}}>
+          <p style={{fontSize:28,marginBottom:8}}>🗑️</p>
+          <p style={{fontWeight:700,fontSize:15,marginBottom:6}}>¿Nueva cotización?</p>
+          <p style={{fontSize:13,color:MUTED,marginBottom:20}}>Se borrará la selección y los datos del cliente</p>
+          <div style={{display:"flex",gap:8}}>
+            <button onClick={resetAll} style={{flex:1,background:"#ef5350",border:"none",borderRadius:10,padding:"12px 0",color:"#fff",fontWeight:600,fontSize:14,cursor:"pointer",fontFamily:"inherit"}}>Sí, limpiar todo</button>
+            <button onClick={()=>setShowReset(false)} style={{...S.btnS,marginBottom:0,flex:1}}>Cancelar</button>
+          </div>
+        </div>
+      </div>}
+
+      {/* ── HEADER FIJO ── */}
+      <div id="app-header" style={{background:`linear-gradient(135deg,${PINK},${PURPLE})`,padding:"14px 16px 0",boxShadow:"0 2px 12px rgba(233,30,140,0.25)"}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <div style={{width:36,height:36,borderRadius:"50%",background:"rgba(255,255,255,0.2)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,fontWeight:900,fontStyle:"italic",color:"#fff",border:"2px solid rgba(255,255,255,0.3)"}}>A</div>
+            <div>
+              <p style={{fontFamily:"'Space Mono',monospace",fontSize:8,color:"rgba(255,255,255,0.6)",letterSpacing:2,textTransform:"uppercase",margin:0}}>Alas Uniformex</p>
+              <h1 style={{fontSize:16,fontWeight:700,margin:0,color:"#fff"}}>Consulta de precios</h1>
+            </div>
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:8}}>
+            <span style={{fontSize:11,color:"rgba(255,255,255,0.7)"}}>{vendedor.split(" ")[0]}</span>
+            <button onClick={()=>setShowReset(true)} style={{background:"rgba(255,255,255,0.15)",border:"1.5px solid rgba(255,255,255,0.3)",borderRadius:8,padding:"5px 10px",color:"#fff",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>＋ Nueva</button>
+          </div>
+        </div>
+        <div style={{display:"flex",gap:5,paddingBottom:12}}>
+          <button style={S.navB(view==="search")} onClick={()=>changeTab("search")}>🔍 Catálogo</button>
+          <button style={S.navB(view==="cart")} onClick={()=>changeTab("cart")}>
+            🛒 Selección{cartCount>0&&<span style={{background:"rgba(255,255,255,0.3)",borderRadius:10,padding:"1px 5px",fontSize:10,marginLeft:3}}>{cartCount}</span>}
+          </button>
+          <button style={S.navB(view==="quote")} onClick={()=>changeTab("quote")}>
+            📄 Cotizar{cartQty>0&&<span style={{background:"rgba(255,255,255,0.3)",borderRadius:10,padding:"1px 5px",fontSize:10,marginLeft:3}}>{cartQty}pzas</span>}
+          </button>
+        </div>
+      </div>
+
+      {/* ── ÁREA SCROLLEABLE ── */}
+      <div id="tab-content" ref={scrollRef}>
+
+        {/* ══ TAB CATÁLOGO ══ */}
+        {view==="search"&&<>
+          {/* Search bar sticky DENTRO del scroll container — funciona correctamente */}
+          <div className="search-bar-sticky">
+            <div style={{position:"relative"}}>
+              <input value={query} onChange={e=>setQuery(e.target.value)}
+                placeholder="Código, descripción, marca o tipo..."
+                style={S.input} autoFocus/>
+              {query&&<button onClick={()=>setQuery("")} style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",color:DIM,fontSize:20,cursor:"pointer"}}>×</button>}
+            </div>
+          </div>
+          <div className="tab-pad">
+            {/* Tags */}
+            {!query&&<div style={{display:"flex",flexWrap:"wrap",gap:6,margin:"10px 0 14px"}}>
+              {["Polo","Chamarra","Playera","Camisa","Servicio","Port Authority","Under Armour","BAW"].map(t=>(
+                <button key={t} onClick={()=>setQuery(t)} style={{background:"#fff",border:"1.5px solid #e2e2e8",borderRadius:20,padding:"4px 12px",color:MUTED,fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>
+                  {t}
+                </button>
+              ))}
+            </div>}
+            {/* Ad-hoc — solo cuando hay query, abajo del todo */}
+            <button onClick={()=>setShowAdhoc(!showAdhoc)} style={{...S.btnS,marginBottom:showAdhoc?0:12,borderColor:showAdhoc?PINK:"#e2e2e8",color:showAdhoc?PINK:MUTED,borderBottomLeftRadius:showAdhoc?0:10,borderBottomRightRadius:showAdhoc?0:10}}>
+              {showAdhoc?"✕ Cancelar":"＋ Producto no encontrado en catálogo"}
+            </button>
+            {showAdhoc&&<div style={{background:"#fff5fa",border:`1.5px solid ${PINK}55`,borderTop:"none",borderRadius:"0 0 12px 12px",padding:"14px 16px",marginBottom:12}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+                <p style={{fontSize:11,color:PINK,fontWeight:700,textTransform:"uppercase",letterSpacing:.5,margin:0}}>Nuevo producto</p>
+                <span style={{fontSize:10,color:DIM,background:"#f0f0f4",padding:"2px 8px",borderRadius:6}}>Código: {nextCustomCode(products)}</span>
+              </div>
+              <div style={{marginBottom:8}}><span style={S.lbl}>Nombre *</span><input value={adhoc.name} onChange={e=>{setAdhoc(a=>({...a,name:e.target.value}));setAdhocError("");}} placeholder="Nombre del producto" style={{...S.input,padding:"8px 12px",fontSize:13}}/></div>
+              <div style={{marginBottom:8}}><span style={S.lbl}>Precio *</span><input type="number" value={adhoc.price} onChange={e=>{setAdhoc(a=>({...a,price:e.target.value}));setAdhocError("");}} placeholder="0.00" style={{...S.input,padding:"8px 12px",fontSize:13}}/></div>
+              <div style={{marginBottom:10}}><span style={S.lbl}>Descripción interna</span><input value={adhoc.desc} onChange={e=>setAdhoc(a=>({...a,desc:e.target.value}))} placeholder="Notas para el equipo" style={{...S.input,padding:"8px 12px",fontSize:13}}/></div>
+              {adhocError&&<p style={{fontSize:12,color:"#ef5350",margin:"0 0 8px"}}>⚠️ {adhocError}</p>}
+              <button onClick={saveAdhoc} style={S.btnP()}>Guardar y agregar a selección</button>
+            </div>}
+            {/* Resultados */}
+            {results.map(p=>{
+              const already=inCart(p.code);
+              return <div key={p.code} style={{...S.card,borderColor:already?PINK+"66":"#e2e2e8",borderWidth:already?1.5:1}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                  <div style={{flex:1,marginRight:10}}>
+                    <div style={{marginBottom:3}}>
+                      <span style={{fontFamily:"'Space Mono',monospace",fontSize:11,color:PINK,fontWeight:700}}>{p.code}</span>
+                      {p.type&&<span style={S.tag(p.type)}>{p.type}</span>}
+                      {p.sinTalla&&<span style={{fontSize:9,color:DIM,marginLeft:6,fontStyle:"italic"}}>sin talla</span>}
+                    </div>
+                    <p style={{fontSize:13,fontWeight:500,margin:"2px 0 1px"}}>{p.name}</p>
+                    <p style={{fontSize:11,color:MUTED,margin:"0 0 2px"}}>{p.brand}</p>
+                    {p.desc&&<p style={{fontSize:11,color:DIM,margin:0,fontStyle:"italic"}}>💬 {p.desc}</p>}
+                  </div>
+                  <div style={{textAlign:"right",minWidth:80}}>
+                    <p style={{margin:"0 0 1px",fontSize:16,fontWeight:700}}>${p.price.toLocaleString()}</p>
+                    <p style={{margin:"0 0 8px",fontSize:10,color:DIM}}>MXN</p>
+                    <button onClick={()=>already?changeTab("cart"):addToCart(p)}
+                      style={{background:already?"#f3e5f5":"#fce4ec",border:`1.5px solid ${already?PURPLE:PINK}`,borderRadius:8,padding:"5px 10px",color:already?PURPLE:PINK,fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600,whiteSpace:"nowrap"}}>
+                      {already?"✓ En lista":"+ Agregar"}
+                    </button>
+                  </div>
+                </div>
+              </div>;
+            })}
+            {query&&results.length===0&&!showAdhoc&&<p style={{color:DIM,textAlign:"center",padding:"32px 0",fontSize:13}}>Sin resultados — usa "＋ Producto no encontrado" ↑</p>}
+            {!query&&!showAdhoc&&<p style={{color:DIM,textAlign:"center",paddingTop:24,fontSize:12}}>Busca por código, tipo de prenda o descripción interna</p>}
+          </div>
+        </>}
+
+        {/* ══ TAB SELECCIÓN ══ */}
+        {view==="cart"&&<div className="tab-pad" style={{paddingTop:14}}>
+          {cart.length===0
+            ?<div style={{textAlign:"center",padding:"60px 0"}}><p style={{fontSize:40,marginBottom:8}}>🛒</p><p style={{color:MUTED,fontSize:14}}>Agrega productos desde el catálogo</p><button onClick={()=>changeTab("search")} style={{...S.btnS,width:"auto",padding:"9px 20px",marginTop:16}}>Ir al catálogo</button></div>
+            :<>
+              {cart.map(item=>{
+                const editing=editingPrice===item._id;
+                const pa=item.precioCustom!=null?item.precioCustom:item.price;
+                return <div key={item._id} style={{...S.card}}>
+                  <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}>
+                    <div>
+                      <span style={{fontFamily:"'Space Mono',monospace",fontSize:11,color:PINK}}>{item.code}</span>
+                      {item.type&&<span style={S.tag(item.type)}>{item.type}</span>}
+                      {item.precioCustom!=null&&<span style={{fontSize:9,color:"#E65100",marginLeft:6,background:"#fff3e0",padding:"1px 5px",borderRadius:4}}>precio editado</span>}
+                      <p style={{fontSize:13,fontWeight:600,margin:"3px 0 0"}}>{item.name}</p>
+                    </div>
+                    <button onClick={()=>removeFromCart(item._id)} style={{background:"none",border:"none",color:"#bbb",fontSize:22,cursor:"pointer",padding:"0 0 0 8px",lineHeight:1}}>×</button>
+                  </div>
+                  {editing
+                    ?<PriceEditor initialPrice={pa} canUpdateCatalog={isEditable(item.brand)} onSave={(p,u)=>applyPriceEdit(item._id,p,u)} onCancel={()=>setEditingPrice(null)}/>
+                    :<div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
+                        <span style={{fontSize:12,color:MUTED}}>Precio: <strong>${fmt(pa)}</strong></span>
+                        <button onClick={()=>setEditingPrice(item._id)} style={{fontSize:11,color:PINK,background:"#fce4ec",border:`1px solid ${PINK}44`,borderRadius:6,padding:"2px 8px",cursor:"pointer",fontFamily:"inherit"}}>✏️ Modificar</button>
+                      </div>
+                  }
+                  {!item.sinTalla&&<>
+                    {[["XS–XL","cantidad",item.price],["2XL","cantidad2xl",item.price2xl||item.price]].map(([lbl,key,pUnit])=>(
+                      <div key={key} style={{display:"grid",gridTemplateColumns:"1fr 80px",gap:8,marginBottom:6}}>
+                        <div><span style={S.lbl}>Cant. {lbl}</span>
+                          <input type="number" min="0" value={item[key]||""} onChange={e=>updateCart(item._id,key,Math.max(0,parseInt(e.target.value)||0))} style={{...S.sel,textAlign:"center"}}/>
+                        </div>
+                        <div style={{textAlign:"right"}}><span style={S.lbl}>Importe</span><p style={{fontSize:14,fontWeight:700,margin:0}}>${fmt((item.precioCustom!=null?item.precioCustom:pUnit)*(item[key]||0))}</p></div>
+                      </div>
+                    ))}
+                    {!item.show3xl?<button onClick={()=>updateCart(item._id,"show3xl",true)} style={{fontSize:11,color:MUTED,background:"#fff",border:"1.5px solid #e2e2e8",borderRadius:6,padding:"3px 10px",cursor:"pointer",fontFamily:"inherit",marginRight:6}}>+ 3XL</button>
+                      :<div style={{display:"grid",gridTemplateColumns:"1fr 80px",gap:8,marginBottom:6}}>
+                        <div><span style={S.lbl}>Cant. 3XL</span><input type="number" min="0" value={item.cantidad3xl||""} onChange={e=>updateCart(item._id,"cantidad3xl",Math.max(0,parseInt(e.target.value)||0))} style={{...S.sel,textAlign:"center"}}/></div>
+                        <div style={{textAlign:"right"}}><span style={S.lbl}>Importe</span><p style={{fontSize:14,fontWeight:700,margin:0}}>${fmt((item.precioCustom!=null?item.precioCustom:(item.price3xl||item.price))*(item.cantidad3xl||0))}</p></div>
+                      </div>}
+                    {!item.show4xl?<button onClick={()=>updateCart(item._id,"show4xl",true)} style={{fontSize:11,color:MUTED,background:"#fff",border:"1.5px solid #e2e2e8",borderRadius:6,padding:"3px 10px",cursor:"pointer",fontFamily:"inherit"}}>+ 4XL</button>
+                      :<div style={{display:"grid",gridTemplateColumns:"1fr 80px",gap:8,marginBottom:6}}>
+                        <div><span style={S.lbl}>Cant. 4XL</span><input type="number" min="0" value={item.cantidad4xl||""} onChange={e=>updateCart(item._id,"cantidad4xl",Math.max(0,parseInt(e.target.value)||0))} style={{...S.sel,textAlign:"center"}}/></div>
+                        <div style={{textAlign:"right"}}><span style={S.lbl}>Importe</span><p style={{fontSize:14,fontWeight:700,margin:0}}>${fmt((item.precioCustom!=null?item.precioCustom:(item.price4xl||item.price))*(item.cantidad4xl||0))}</p></div>
+                      </div>}
+                  </>}
+                  {item.sinTalla&&<div style={{display:"grid",gridTemplateColumns:"1fr 80px",gap:8}}>
+                    <div><span style={S.lbl}>Cantidad</span><input type="number" min="1" value={item.cantidad||""} onChange={e=>updateCart(item._id,"cantidad",Math.max(1,parseInt(e.target.value)||1))} style={{...S.sel,textAlign:"center"}}/></div>
+                    <div style={{textAlign:"right"}}><span style={S.lbl}>Importe</span><p style={{fontSize:14,fontWeight:700,margin:0}}>${fmt(pa*(item.cantidad||0))}</p></div>
+                  </div>}
+                </div>;
+              })}
+              <div style={{...S.card,marginTop:4}}>
+                <span style={{...S.lbl,marginBottom:8}}>Tipo de persona</span>
+                <div style={{display:"flex",gap:8,marginBottom:14}}>
+                  <button style={S.toggle(esMoral,PINK)} onClick={()=>setQuote(q=>({...q,tipoPersona:"moral"}))}>🏢 Moral</button>
+                  <button style={S.toggle(!esMoral,"#0288D1")} onClick={()=>setQuote(q=>({...q,tipoPersona:"fisica"}))}>👤 Física</button>
+                </div>
+                <div style={S.totR(false)}><span>Subtotal</span><span>${fmt(subtotal)}</span></div>
+                {esMoral&&<div style={S.totR(false)}><span style={{color:"#ef5350"}}>ISR (1.25%)</span><span style={{color:"#ef5350"}}>-${fmt(isr)}</span></div>}
+                <div style={S.totR(false)}><span>IVA (16%)</span><span>${fmt(iva)}</span></div>
+                <div style={S.totR(true)}><span>Total</span><span>${fmt(total)} MXN</span></div>
+              </div>
+              <button onClick={copyWA} style={{...S.btnP(copied?"#0f9b8e":undefined)}}>{copied?"✓ Copiado":"📋 Copiar resumen WhatsApp"}</button>
+              <button onClick={()=>changeTab("quote")} style={S.btnS}>📄 Generar cotización formal →</button>
+            </>}
+        </div>}
+
+        {/* ══ TAB COTIZACIÓN ══ */}
+        {view==="quote"&&<div className="tab-pad" style={{paddingTop:14}}>
+          <div style={S.card}>
+            <p style={{fontSize:11,color:MUTED,margin:"0 0 12px",textTransform:"uppercase",letterSpacing:1,fontWeight:600}}>Datos del cliente</p>
+            <span style={S.lbl}>Buscar cliente existente</span>
+            <div style={{position:"relative",marginBottom:10}}>
+              <input value={clientQuery}
+                onChange={e=>{setClientQuery(e.target.value);setQuote(q=>({...q,cliente:e.target.value,isNew:true}));}}
+                placeholder="Nombre, empresa o correo..." style={{...S.input,marginBottom:0}}/>
+              {clientResults.length>0&&<div style={{position:"absolute",top:"100%",left:0,right:0,background:"#fff",border:"1.5px solid #e2e2e8",borderRadius:10,zIndex:30,overflow:"hidden",marginTop:4,boxShadow:"0 4px 16px rgba(0,0,0,0.1)"}}>
+                {clientResults.map((c,i)=>(
+                  <button key={i} onClick={()=>selectClient(c)}
+                    style={{display:"block",width:"100%",padding:"10px 14px",background:"none",border:"none",borderBottom:"1px solid #f0f0f0",textAlign:"left",cursor:"pointer",color:TEXT,fontFamily:"inherit"}}>
+                    <span style={{fontSize:13,fontWeight:500}}>{c.nombre||"(sin nombre)"}</span>
+                    <span style={{fontSize:11,color:DIM,marginLeft:8}}>{c.empresa}</span>
+                  </button>
+                ))}
+              </div>}
+            </div>
+            {quote.isNew&&clientQuery&&<div style={{background:"#fff8e1",border:"1.5px solid #ffca28aa",borderRadius:8,padding:"8px 12px",marginBottom:10,fontSize:12,color:"#E65100",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <span>⚠️ Cliente nuevo — completa datos y guarda</span>
+              <button onClick={saveNewClient} style={{background:"#E65100",border:"none",borderRadius:6,padding:"4px 10px",color:"#fff",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Guardar</button>
+            </div>}
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+              {[["Folio","folio"],["Empresa","empresa"],["Contacto","contacto"],["Teléfono","telefono"],["Cuenta (razón social)","cuenta"]].map(([lbl,key])=>(
+                <div key={key} style={key==="folio"||key==="cuenta"?{gridColumn:"1/-1"}:{}}>
+                  <span style={S.lbl}>{lbl}</span>
+                  <input value={quote[key]||""} onChange={e=>setQuote(q=>({...q,[key]:e.target.value}))} style={{...S.input,padding:"8px 12px",fontSize:13}}/>
+                </div>
+              ))}
+              <div style={{gridColumn:"1/-1"}}>
+                <span style={S.lbl}>Elaboró</span>
+                <select value={quote.vendedor} onChange={e=>setQuote(q=>({...q,vendedor:e.target.value}))} style={S.sel}>
+                  <option value="">Selecciona vendedor...</option>
+                  {VENDEDORES.map(v=><option key={v}>{v}</option>)}
+                </select>
+              </div>
+            </div>
+            <div style={{marginTop:12}}>
+              <span style={{...S.lbl,marginBottom:8}}>Tipo de persona</span>
+              <div style={{display:"flex",gap:8}}>
+                <button style={S.toggle(esMoral,PINK)} onClick={()=>setQuote(q=>({...q,tipoPersona:"moral"}))}>🏢 Moral</button>
+                <button style={S.toggle(!esMoral,"#0288D1")} onClick={()=>setQuote(q=>({...q,tipoPersona:"fisica"}))}>👤 Física</button>
+              </div>
+            </div>
+          </div>
+          {cart.length===0
+            ?<div style={{...S.card,textAlign:"center",padding:24}}>
+                <p style={{color:MUTED,fontSize:13}}>No hay productos en la selección</p>
+                <button onClick={()=>changeTab("search")} style={{...S.btnS,width:"auto",padding:"8px 20px",marginTop:10,marginBottom:0}}>Ir al catálogo</button>
+              </div>
+            :<>
+              <div style={S.card}>
+                <p style={{fontSize:11,color:MUTED,margin:"0 0 10px",textTransform:"uppercase",letterSpacing:1,fontWeight:600}}>Resumen</p>
+                {lines.length===0&&<p style={{fontSize:12,color:DIM,fontStyle:"italic",padding:"8px 0"}}>Ingresa cantidades en la pestaña Selección ←</p>}
+                {lines.map((l,i)=>(
+                  <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"6px 0",borderBottom:"1px solid #f0f0f4",fontSize:13}}>
+                    <span>{l.name} <span style={{color:DIM,fontSize:11}}>({l.code}{!l.sinTalla?" · "+l.tallaLine:""} ×{l.cantidadLine})</span></span>
+                    <span style={{fontWeight:600,marginLeft:8}}>${fmt(l.precioLine*l.cantidadLine)}</span>
+                  </div>
+                ))}
+                <div style={{marginTop:8}}>
+                  <div style={S.totR(false)}><span>Subtotal</span><span>${fmt(subtotal)}</span></div>
+                  {esMoral&&<div style={S.totR(false)}><span style={{color:"#ef5350"}}>ISR (1.25%)</span><span style={{color:"#ef5350"}}>-${fmt(isr)}</span></div>}
+                  <div style={S.totR(false)}><span>IVA (16%)</span><span>${fmt(iva)}</span></div>
+                  <div style={S.totR(true)}><span>Total</span><span>${fmt(total)} MXN</span></div>
+                </div>
+              </div>
+              {driveUrl&&<div style={{background:"#e8f5e9",border:"1.5px solid #81c78466",borderRadius:10,padding:"10px 14px",marginBottom:8,fontSize:12,color:"#2e7d32",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <span>✅ Guardado en Drive</span>
+                <a href={driveUrl} target="_blank" rel="noopener" style={{color:"#2e7d32",fontSize:11,fontWeight:600}}>Ver →</a>
+              </div>}
+              <button onClick={printPDF} style={S.btnP()}>🖨️ Generar PDF con formato Alas</button>
+              <button onClick={saveToDrive} disabled={savingDrive} style={{...S.btnP(PURPLE),opacity:savingDrive?0.6:1}}>{savingDrive?"Guardando...":"☁️ Guardar en Drive"}</button>
+              <button onClick={copyWA} style={{...S.btnS,color:copied?"#0f9b8e":MUTED,borderColor:copied?"#0f9b8e":"#e2e2e8"}}>{copied?"✓ Copiado":"📋 Copiar resumen WhatsApp"}</button>
+              <button onClick={openEmailModal} style={S.btnS}>✉️ Enviar por correo</button>
+            </>}
+        </div>}
+
+      </div>{/* fin tab-content */}
+    </div>
+  );
+}
+
+// ── ROOT ──────────────────────────────────────────────────────────────────────
+function App() {
+  const [view,setView]     = useState("login");
+  const [vendedor,setVendedor] = useState("");
+  const [productos,setProductos] = useState([]);
+  const [clientes,setClientes]   = useState([]);
+  const [loading,setLoading] = useState(false);
+  const [error,setError]   = useState("");
+
+  const handleLogin=async(pin,vend)=>{
+    setLoading(true);setError("");
+    try{
+      const res=await api("validatePin",{pin});
+      if(!res.ok){setError("PIN incorrecto. Intenta de nuevo.");setLoading(false);return;}
+      setVendedor(vend);
+      const [pr,cr]=await Promise.all([api("getProductos"),api("getClientes")]);
+      if(pr.ok) setProductos((pr.productos||[]).map(mapProducto));
+      if(cr.ok){
+        const raw=cr.clientes||[];
+        if(raw.length>0) console.log("🔑 Clientes raw[0] keys:", Object.keys(raw[0]));
+        setClientes(raw.map(mapCliente));
+      }
+      setView("main");
+    }catch(e){setError("Error de conexión. Verifica tu internet.");}
+    setLoading(false);
+  };
+
+  if(loading) return <Spinner msg="Conectando con Alas..."/>;
+  if(view==="login") return <LoginScreen onLogin={handleLogin} loading={loading} error={error}/>;
+  return <MainApp vendedor={vendedor} initProductos={productos} initClientes={clientes}/>;
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>

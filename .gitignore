@@ -1,0 +1,23 @@
+# Archivos del sistema operativo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editores
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Archivos temporales
+*.tmp
+*.bak
+*.log
+
+# Configuración local (si decides agregar después)
+config.local.js
+.env.local
+
+# Archivos de respaldo
+ConsultaPrecios-v2.html
