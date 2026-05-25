@@ -340,7 +340,7 @@ function MainApp({vendedor,initProductos,initClientes}) {
   const lines=getCartLines();
   const subtotal=lines.reduce((a,l)=>a+l.precioLine*l.cantidadLine,0);
   const isr=esMoral?subtotal*0.0125:0;
-  const base=subtotal-isr; const iva=base*0.16; const total=base+iva;
+  const iva=subtotal*0.16; const total=subtotal+iva-isr;
   const cartCount=cart.length;
   const cartQty=cart.reduce((a,i)=>a+(i.sinTalla?i.cantidad||0:(i.cantidad||0)+(i.cantidad2xl||0)+(i.show3xl?i.cantidad3xl||0:0)+(i.show4xl?i.cantidad4xl||0:0)),0);
 
