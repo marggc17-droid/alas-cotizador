@@ -153,8 +153,8 @@ function mapCliente(c) {
 
 // Estilos compartidos
 const S = {
-  input:{width:"100%",boxSizing:"border-box",background:"#fff",border:"1.5px solid #e2e2e8",borderRadius:10,padding:"10px 14px",fontSize:14,color:TEXT,outline:"none",fontFamily:"inherit",boxShadow:"0 1px 3px rgba(0,0,0,0.05)"},
-  sel:{background:"#fff",border:"1.5px solid #e2e2e8",borderRadius:8,padding:"9px 12px",color:TEXT,fontFamily:"inherit",fontSize:13,outline:"none",width:"100%"},
+  input:{width:"100%",boxSizing:"border-box",background:"#fff",border:"1.5px solid #e2e2e8",borderRadius:10,padding:"10px 14px",fontSize:16,color:TEXT,outline:"none",fontFamily:"inherit",boxShadow:"0 1px 3px rgba(0,0,0,0.05)"},
+  sel:{background:"#fff",border:"1.5px solid #e2e2e8",borderRadius:8,padding:"9px 12px",color:TEXT,fontFamily:"inherit",fontSize:16,outline:"none",width:"100%"},
   lbl:{fontSize:11,color:MUTED,marginBottom:4,display:"block",fontWeight:600,letterSpacing:0.3},
   card:{background:CARD,border:"1px solid #e2e2e8",borderRadius:14,padding:"14px 16px",marginBottom:10,boxShadow:"0 1px 4px rgba(0,0,0,0.06)"},
   btnP:(c)=>({background:c||`linear-gradient(135deg,${PINK},${PURPLE})`,border:"none",borderRadius:10,padding:"13px 20px",color:"#fff",fontSize:14,fontWeight:600,cursor:"pointer",fontFamily:"inherit",width:"100%",marginBottom:8,boxShadow:"0 2px 8px rgba(233,30,140,0.25)"}),
@@ -203,7 +203,7 @@ function PriceEditor({initialPrice,canUpdateCatalog,onSave,onCancel}) {
     <div style={{background:"#fff8f0",border:`1.5px solid ${PINK}44`,borderRadius:10,padding:"12px 14px",marginBottom:10}}>
       <span style={{...S.lbl,color:"#E65100",marginBottom:8}}>✏️ Modificar precio</span>
       <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:8}}>
-        <input type="number" value={val} onChange={e=>setVal(e.target.value)} style={{...S.input,padding:"8px 12px",fontSize:14,flex:1}} autoFocus/>
+        <input type="number" value={val} onChange={e=>setVal(e.target.value)} style={{...S.input,padding:"8px 12px",fontSize:16,flex:1}} autoFocus/>
         <button onClick={()=>onSave(val,upd)} style={{background:PINK,border:"none",borderRadius:8,padding:"8px 16px",color:"#fff",fontSize:13,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>Aplicar</button>
         <button onClick={onCancel} style={{background:"none",border:"1.5px solid #e2e2e8",borderRadius:8,padding:"8px 10px",color:MUTED,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>✕</button>
       </div>
@@ -380,7 +380,7 @@ function MainApp({vendedor,initProductos,initClientes}) {
     doc.setTextColor(150,150,150); doc.setFontSize(8); doc.setFont("helvetica","normal");
     doc.text(new Date().toLocaleDateString("es-MX",{day:"2-digit",month:"2-digit",year:"numeric"}),W-15,y+16,{align:"right"});
     y+=28; doc.setDrawColor(233,30,140); doc.setLineWidth(0.5); doc.line(15,y,W-15,y); y+=6;
-    const ci=[["Atención:",quote.cliente||"—"],["Empresa:",quote.empresa||"—"],["Correo:",quote.contacto||"—"],["Teléfono:",quote.telefono||"—"],["Cuenta:",quote.cuenta||"—"],["Elaboró:",quote.vendedor||"—"]];
+    const ci=[["Atención:",quote.cliente||"—"],["Empresa:",quote.empresa||"—"],["Correo:",quote.contacto||"—"],["Teléfono:",quote.telefono||"—"],["Elaboró:",quote.vendedor||"—"]];
     doc.setFontSize(9); doc.setTextColor(80,80,80);
     ci.slice(0,3).forEach(([lbl,val],i)=>{const cy=y+i*6;doc.setFont("helvetica","bold");doc.text(lbl,15,cy);doc.setFont("helvetica","normal");doc.text(val,38,cy);});
     ci.slice(3).forEach(([lbl,val],i)=>{const cy=y+i*6;doc.setFont("helvetica","bold");doc.text(lbl,110,cy);doc.setFont("helvetica","normal");doc.text(val,125,cy);});
@@ -515,9 +515,9 @@ function MainApp({vendedor,initProductos,initClientes}) {
                 <p style={{fontSize:11,color:PINK,fontWeight:700,textTransform:"uppercase",letterSpacing:.5,margin:0}}>Nuevo producto</p>
                 <span style={{fontSize:10,color:DIM,background:"#f0f0f4",padding:"2px 8px",borderRadius:6}}>Código: {nextCustomCode(products)}</span>
               </div>
-              <div style={{marginBottom:8}}><span style={S.lbl}>Nombre *</span><input value={adhoc.name} onChange={e=>{setAdhoc(a=>({...a,name:e.target.value}));setAdhocError("");}} placeholder="Nombre del producto" style={{...S.input,padding:"8px 12px",fontSize:13}}/></div>
-              <div style={{marginBottom:8}}><span style={S.lbl}>Precio *</span><input type="number" value={adhoc.price} onChange={e=>{setAdhoc(a=>({...a,price:e.target.value}));setAdhocError("");}} placeholder="0.00" style={{...S.input,padding:"8px 12px",fontSize:13}}/></div>
-              <div style={{marginBottom:10}}><span style={S.lbl}>Descripción interna</span><input value={adhoc.desc} onChange={e=>setAdhoc(a=>({...a,desc:e.target.value}))} placeholder="Notas para el equipo" style={{...S.input,padding:"8px 12px",fontSize:13}}/></div>
+              <div style={{marginBottom:8}}><span style={S.lbl}>Nombre *</span><input value={adhoc.name} onChange={e=>{setAdhoc(a=>({...a,name:e.target.value}));setAdhocError("");}} placeholder="Nombre del producto" style={{...S.input,padding:"8px 12px",fontSize:16}}/></div>
+              <div style={{marginBottom:8}}><span style={S.lbl}>Precio *</span><input type="number" value={adhoc.price} onChange={e=>{setAdhoc(a=>({...a,price:e.target.value}));setAdhocError("");}} placeholder="0.00" style={{...S.input,padding:"8px 12px",fontSize:16}}/></div>
+              <div style={{marginBottom:10}}><span style={S.lbl}>Descripción interna</span><input value={adhoc.desc} onChange={e=>setAdhoc(a=>({...a,desc:e.target.value}))} placeholder="Notas para el equipo" style={{...S.input,padding:"8px 12px",fontSize:16}}/></div>
               {adhocError&&<p style={{fontSize:12,color:"#ef5350",margin:"0 0 8px"}}>⚠️ {adhocError}</p>}
               <button onClick={saveAdhoc} style={S.btnP()}>Guardar y agregar a selección</button>
             </div>}
@@ -646,7 +646,7 @@ function MainApp({vendedor,initProductos,initClientes}) {
               {[["Folio","folio"],["Empresa","empresa"],["Correo","contacto"],["Teléfono","telefono"],["Cuenta (razón social)","cuenta"]].map(([lbl,key])=>(
                 <div key={key} style={key==="folio"||key==="cuenta"?{gridColumn:"1/-1"}:{}}>
                   <span style={S.lbl}>{lbl}</span>
-                  <input value={quote[key]||""} onChange={e=>setQuote(q=>({...q,[key]:e.target.value}))} style={{...S.input,padding:"8px 12px",fontSize:13}}/>
+                  <input value={quote[key]||""} onChange={e=>setQuote(q=>({...q,[key]:e.target.value}))} style={{...S.input,padding:"8px 12px",fontSize:16}}/>
                 </div>
               ))}
               <div style={{gridColumn:"1/-1"}}>
