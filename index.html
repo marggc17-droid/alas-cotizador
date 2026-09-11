@@ -360,6 +360,25 @@ function MainApp({vendedor,initProductos,initClientes}) {
     setSavingCliente(false);
   }
 
+  async function saveClienteNew() {
+    if(!clienteForm) return;
+    if(!clienteForm.nombre.trim()&&!clienteForm.empresa.trim()){alert("Captura al menos el nombre o la empresa.");return;}
+    setSavingCliente(true);
+    try{
+      const res=await api("saveCliente",{atencion:clienteForm.nombre,empresa:clienteForm.empresa,email:clienteForm.contacto,telefono:clienteForm.telefono,cuenta:clienteForm.cuenta});
+      if(res.ok){
+        try{
+          const cr=await api("getClientes");
+          if(cr.ok) setClients((cr.clientes||[]).map(mapCliente));
+        }catch(e){}
+        setClienteForm(null);
+        setClienteFilter("");
+        alert("✅ Cliente guardado.");
+      }else{alert("No se pudo guardar el cliente: "+(res.error||"desconocido"));}
+    }catch(e){alert("Error de conexión al guardar el cliente: "+e.message);}
+    setSavingCliente(false);
+  }
+
   function resetAll(){setCart([]);setQuote({...EMPTY_QUOTE(),vendedor});setClientQuery("");setQuery("");setShowReset(false);changeTab("search");setDriveUrl(null);setDriveError(null);setPendingPdf(null);}
 
   async function saveAdhoc(){
@@ -887,36 +906,44 @@ function MainApp({vendedor,initProductos,initClientes}) {
         {view==="clientes"&&<div className="tab-pad">
           {clienteForm
             ?<div style={S.card}>
-                <p style={{fontSize:11,color:MUTED,margin:"0 0 10px",textTransform:"uppercase",letterSpacing:1,fontWeight:600}}>Editar cliente</p>
+                <p style={{fontSize:11,color:MUTED,margin:"0 0 10px",textTransform:"uppercase",letterSpacing:1,fontWeight:600}}>{clienteForm.isNew?"Nuevo cliente":"Editar cliente"}</p>
                 {[["Atención","nombre"],["Empresa","empresa"],["Correo","contacto"],["Teléfono","telefono"],["Cuenta (razón social)","cuenta"]].map(([lbl,key])=>(
                   <div key={key} style={{marginBottom:8}}>
                     <span style={S.lbl}>{lbl}</span>
-                    <input value={clienteForm[key]||""} onChange={e=>setClienteForm(f=>({...f,[key]:e.target.value}))} style={{...S.input,padding:"8px 12px",fontSize:16}}/>
+                    <input value={clienteForm[key]||""} onChange={e=>setClienteForm(f=>({...f,[key]:e.target.value}))} style={{...S.input,padding:"8px 12px",fontSize:16}} autoFocus={!!clienteForm.isNew&&key==="nombre"}/>
                   </div>
                 ))}
-                {clienteForm.row==null&&<p style={{fontSize:11,color:"#E65100",fontStyle:"italic",margin:"0 0 8px"}}>⚠️ Este cliente se creó en esta sesión y aún no tiene fila confirmada del servidor — recarga la app antes de editarlo.</p>}
+                {!clienteForm.isNew&&clienteForm.row==null&&<p style={{fontSize:11,color:"#E65100",fontStyle:"italic",margin:"0 0 8px"}}>⚠️ Este cliente se creó en esta sesión y aún no tiene fila confirmada del servidor — recarga la app antes de editarlo.</p>}
                 <div style={{display:"flex",gap:8,marginTop:10}}>
-                  <button onClick={saveClienteEdit} disabled={savingCliente||clienteForm.row==null} style={{...S.btnP(),marginBottom:0,flex:1,opacity:(savingCliente||clienteForm.row==null)?0.5:1}}>{savingCliente?"Guardando...":"Guardar cambios"}</button>
+                  <button onClick={clienteForm.isNew?saveClienteNew:saveClienteEdit} disabled={savingCliente||(!clienteForm.isNew&&clienteForm.row==null)} style={{...S.btnP(),marginBottom:0,flex:1,opacity:(savingCliente||(!clienteForm.isNew&&clienteForm.row==null))?0.5:1}}>{savingCliente?"Guardando...":(clienteForm.isNew?"Guardar cliente":"Guardar cambios")}</button>
                   <button onClick={()=>setClienteForm(null)} style={{...S.btnS,marginBottom:0,flex:1}}>Cancelar</button>
                 </div>
               </div>
             :<>
               <div className="search-bar-sticky">
-                <input value={clienteFilter} onChange={e=>setClienteFilter(e.target.value)} placeholder="Buscar por nombre o empresa..." style={S.input}/>
+                <div style={{position:"relative"}}>
+                  <input value={clienteFilter} onChange={e=>setClienteFilter(e.target.value)} placeholder="Buscar por nombre o empresa..." style={S.input}/>
+                  {clienteFilter&&<button onClick={()=>setClienteFilter("")} style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",color:DIM,fontSize:20,cursor:"pointer"}}>×</button>}
+                </div>
               </div>
               <div style={{marginTop:12}}>
+                <button onClick={()=>setClienteForm({isNew:true,row:null,nombre:clienteFilter.trim(),empresa:"",contacto:"",telefono:"",cuenta:""})}
+                  style={{...S.btnS,borderColor:PINK,color:PINK,fontWeight:600,marginBottom:12}}>＋ Nuevo cliente</button>
                 {clients.length===0&&<p style={{fontSize:12,color:DIM,fontStyle:"italic",padding:"8px 0"}}>No hay clientes cargados.</p>}
-                {clients
-                  .filter(c=>{
-                    const q=clienteFilter.toLowerCase().trim();
-                    return !q||(c.nombre||"").toLowerCase().includes(q)||(c.empresa||"").toLowerCase().includes(q);
-                  })
-                  .map((c,i)=>(
-                    <div key={i} style={{...S.card,cursor:"pointer"}} onClick={()=>setClienteForm({row:c.row,nombre:c.nombre,empresa:c.empresa,contacto:c.contacto,telefono:c.telefono,cuenta:c.cuenta})}>
-                      <p style={{fontWeight:600,fontSize:14,margin:"0 0 2px"}}>{c.nombre||"(sin nombre)"}</p>
-                      <p style={{fontSize:12,color:MUTED,margin:0}}>{c.empresa}{c.contacto?" · "+c.contacto:""}{c.telefono?" · "+c.telefono:""}</p>
-                    </div>
-                  ))}
+                {(()=>{
+                  const q=clienteFilter.toLowerCase().trim();
+                  const filtered=clients.filter(c=>!q||(c.nombre||"").toLowerCase().includes(q)||(c.empresa||"").toLowerCase().includes(q));
+                  return<>
+                    {q&&filtered.length===0&&clients.length>0&&
+                      <p style={{fontSize:12,color:DIM,fontStyle:"italic",padding:"8px 0"}}>No se encontró ningún cliente para "{clienteFilter.trim()}". Usa "＋ Nuevo cliente" para darlo de alta.</p>}
+                    {filtered.map((c,i)=>(
+                      <div key={i} style={{...S.card,cursor:"pointer"}} onClick={()=>setClienteForm({row:c.row,nombre:c.nombre,empresa:c.empresa,contacto:c.contacto,telefono:c.telefono,cuenta:c.cuenta})}>
+                        <p style={{fontWeight:600,fontSize:14,margin:"0 0 2px"}}>{c.nombre||"(sin nombre)"}</p>
+                        <p style={{fontSize:12,color:MUTED,margin:0}}>{c.empresa}{c.contacto?" · "+c.contacto:""}{c.telefono?" · "+c.telefono:""}</p>
+                      </div>
+                    ))}
+                  </>;
+                })()}
               </div>
             </>}
         </div>}
